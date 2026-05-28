@@ -1,0 +1,6 @@
+{
+  "name": "快速記帳 財務助理",
+  "description": "一個優雅、直覺且充滿美感的個人理財記帳應用程式",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
