@@ -15,6 +15,10 @@ export interface UserAccount {
 const DB_KEY = 'qe_multiuser_database';
 const CURRENT_USER_KEY = 'qe_current_user_email';
 
+// In-memory fallback cache for restricted storage environments (incognito, standalone WebViews, private tabs)
+let memoryDB: Record<string, UserAccount> | null = null;
+let memoryCurrentUser: string | null = null;
+
 // Base helper for standard string hashing to simulate secure password storage
 function hashPassword(password: string): string {
   let hash = 0;
@@ -28,38 +32,54 @@ function hashPassword(password: string): string {
 
 export class AccountDatabase {
   private static loadDB(): Record<string, UserAccount> {
-    const data = localStorage.getItem(DB_KEY);
-    if (!data) {
-      // Boot default user "Alex Thompson"
-      const defaultUser: UserAccount = {
-        email: 'alex.t@clarity.finance',
-        name: 'Alex Thompson',
-        passwordHash: hashPassword('12345678'), // Default demo password
-        avatar: '',
-        transactions: INITIAL_TRANSACTIONS,
-        budgetLimit: 10000,
-        settings: {
-          notifications: true,
-          currency: 'USD',
-          bioLock: true,
-          theme: 'light'
-        }
-      };
-
-      const initialDB = { [defaultUser.email.toLowerCase()]: defaultUser };
-      localStorage.setItem(DB_KEY, JSON.stringify(initialDB));
-      return initialDB;
-    }
+    const defaultUser: UserAccount = {
+      email: 'alex.t@clarity.finance',
+      name: 'Alex Thompson',
+      passwordHash: hashPassword('12345678'), // Default demo password
+      avatar: '',
+      transactions: INITIAL_TRANSACTIONS,
+      budgetLimit: 10000,
+      settings: {
+        notifications: true,
+        currency: 'USD',
+        bioLock: true,
+        theme: 'light'
+      }
+    };
 
     try {
-      return JSON.parse(data);
-    } catch {
-      return {};
+      const data = localStorage.getItem(DB_KEY);
+      if (!data) {
+        const initialDB = { [defaultUser.email.toLowerCase()]: defaultUser };
+        try {
+          localStorage.setItem(DB_KEY, JSON.stringify(initialDB));
+        } catch (e) {
+          console.warn("Storage writing restricted, initializing memory cache instead:", e);
+        }
+        return initialDB;
+      }
+
+      try {
+        return JSON.parse(data);
+      } catch {
+        return {};
+      }
+    } catch (e) {
+      console.warn("Failed to read from localStorage. Supporting in-memory database container fallback:", e);
+      if (!memoryDB) {
+        memoryDB = { [defaultUser.email.toLowerCase()]: defaultUser };
+      }
+      return memoryDB;
     }
   }
 
   private static saveDB(db: Record<string, UserAccount>) {
-    localStorage.setItem(DB_KEY, JSON.stringify(db));
+    try {
+      localStorage.setItem(DB_KEY, JSON.stringify(db));
+    } catch (e) {
+      console.warn("Failed to write updates to localStorage. Storing inside memory space:", e);
+      memoryDB = db;
+    }
   }
 
   // Find user details dynamically
@@ -183,15 +203,25 @@ export class AccountDatabase {
 
   // Get current session email
   static getCurrentUserEmail(): string | null {
-    return localStorage.getItem(CURRENT_USER_KEY);
+    try {
+      return localStorage.getItem(CURRENT_USER_KEY);
+    } catch (e) {
+      console.warn("Storage security limits block access to session records. Using standard fallback cache:", e);
+      return memoryCurrentUser;
+    }
   }
 
   // Set current user session
   static setCurrentUserEmail(email: string | null) {
-    if (email) {
-      localStorage.setItem(CURRENT_USER_KEY, email);
-    } else {
-      localStorage.removeItem(CURRENT_USER_KEY);
+    try {
+      if (email) {
+        localStorage.setItem(CURRENT_USER_KEY, email);
+      } else {
+        localStorage.removeItem(CURRENT_USER_KEY);
+      }
+    } catch (e) {
+      console.warn("Storage write restriction in setting current user. Pinning in memory:", e);
+      memoryCurrentUser = email;
     }
   }
 }

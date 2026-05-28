@@ -25,9 +25,10 @@ export default function App() {
         };
       }
     }
-    const saved = localStorage.getItem('qe_profile');
-    if (saved) {
-      try {
+    
+    try {
+      const saved = localStorage.getItem('qe_profile');
+      if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.email) {
           // Sync with DB
@@ -37,8 +38,11 @@ export default function App() {
           }
           return parsed;
         }
-      } catch (e) { return null; }
+      }
+    } catch (e) {
+      console.warn("Storage profile load restriction, returning fallback default user:", e);
     }
+    
     // Start with default profile of Alex Thompson so app is fully ready
     return {
       name: 'Alex Thompson',
@@ -78,7 +82,11 @@ export default function App() {
   // B. Switch loaded data whenever a user logs in / changes session
   useEffect(() => {
     if (authProfile) {
-      localStorage.setItem('qe_profile', JSON.stringify(authProfile));
+      try {
+        localStorage.setItem('qe_profile', JSON.stringify(authProfile));
+      } catch (e) {
+        console.warn("localStorage setItem error for qe_profile:", e);
+      }
       AccountDatabase.setCurrentUserEmail(authProfile.email);
       // Fetch details from multiuser database system if user account exists
       const dbUser = AccountDatabase.getUserByEmail(authProfile.email);
@@ -93,7 +101,11 @@ export default function App() {
         });
       }
     } else {
-      localStorage.removeItem('qe_profile');
+      try {
+        localStorage.removeItem('qe_profile');
+      } catch (e) {
+        console.warn("localStorage removeItem error for qe_profile:", e);
+      }
       AccountDatabase.setCurrentUserEmail(null);
     }
   }, [authProfile]);
