@@ -32,7 +32,7 @@ service cloud.firestore {
     function isValidAppSettings(settings) {
       return settings is map
         && settings.keys().hasAll(['notifications', 'currency', 'bioLock', 'theme'])
-        && settings.keys().size() == 4
+        && settings.size() == 4
         && settings.notifications is bool
         && settings.currency is string && settings.currency.size() <= 10
         && settings.bioLock is bool
@@ -42,21 +42,21 @@ service cloud.firestore {
     function isValidUserProfile(user) {
       return user is map
         && user.keys().hasAll(['name', 'email', 'avatar', 'budgetLimit', 'settings'])
-        && user.keys().size() == 5
+        && user.size() == 5
         && user.name is string && user.name.size() <= 100
         && user.email is string && user.email.size() <= 200
         && user.avatar is string && user.avatar.size() <= 500
-        && user.budgetLimit is number && user.budgetLimit >= 0
+        && (user.budgetLimit is int || user.budgetLimit is float) && user.budgetLimit >= 0
         && isValidAppSettings(user.settings);
     }
 
     function isValidTransaction(tx) {
       return tx is map
         && tx.keys().hasAll(['id', 'title', 'amount', 'type', 'category', 'date', 'time'])
-        && tx.keys().size() == 7
+        && tx.size() == 7
         && tx.id is string && tx.id.size() <= 128
         && tx.title is string && tx.title.size() <= 200
-        && tx.amount is number && tx.amount >= 0
+        && (tx.amount is int || tx.amount is float) && tx.amount >= 0
         && tx.type is string && (tx.type == 'expense' || tx.type == 'income')
         && tx.category is string && tx.category.size() <= 50
         && tx.date is string && tx.date.size() <= 20
