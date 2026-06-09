@@ -5,13 +5,13 @@
   --font-sans: "Manrope", ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
-/* Custom Scrollbar suppression */
-.scrollbar-none::-webkit-scrollbar {
-  display: none;
-}
-.scrollbar-none {
-  -ms-overflow-style: none;  /* IE and Edge */
+/* Custom Scrollbar suppression globally */
+* {
   scrollbar-width: none;  /* Firefox */
+  -ms-overflow-style: none;  /* IE/Edge */
+}
+*::-webkit-scrollbar {
+  display: none;  /* Chrome, Safari, Opera */
 }
 
 @keyframes fadeIn {

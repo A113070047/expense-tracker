@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "User application settings preferences.",
+      "type": "object",
+      "properties": {
+        "notifications": { "type": "boolean" },
+        "currency": { "type": "string" },
+        "bioLock": { "type": "boolean" },
+        "theme": { "type": "string" }
+      },
+      "required": ["notifications", "currency", "bioLock", "theme"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account information, budget limit, and base settings.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "avatar": { "type": "string" },
+        "budgetLimit": { "type": "number" },
+        "settings": { "$ref": "AppSettings" }
+      },
+      "required": ["name", "email", "avatar", "budgetLimit", "settings"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "An expense or income transaction entry logged by the user.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "amount": { "type": "number" },
+        "type": { "type": "string", "enum": ["expense", "income"] },
+        "category": { "type": "string", "enum": ["food", "transport", "shopping", "entertainment", "housing", "others"] },
+        "date": { "type": "string" },
+        "time": { "type": "string" }
+      },
+      "required": ["id", "title", "amount", "type", "category", "date", "time"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User information, settings configuration and budget threshold."
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "User items and detail breakdown for tracking budget allocation."
+    }
+  }
+}

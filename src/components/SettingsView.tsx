@@ -34,6 +34,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [profileEmail, setProfileEmail] = useState<string>(userProfile.email);
   const [confirmClearOpen, setConfirmClearOpen] = useState<boolean>(false);
 
+  // Synchronize local state with fresh profile prop to handle async logins
+  React.useEffect(() => {
+    if (!isEditingProfile) {
+      setProfileName(userProfile.name);
+      setProfileEmail(userProfile.email);
+    }
+  }, [userProfile, isEditingProfile]);
+
   // Calculate本月已花費
   const totalSpent = transactions
     .filter(t => t.type === TransactionType.EXPENSE)

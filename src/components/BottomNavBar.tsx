@@ -9,7 +9,7 @@ interface BottomNavBarProps {
 
 export const BottomNavBar: React.FC<BottomNavBarProps> = ({ activeTab, onTabChange }) => {
   return (
-    <nav className="fixed bottom-0 left-0 w-full flex justify-around items-center px-4 py-2.5 bg-[#eceef0]/95 dark:bg-[#2d3133]/95 backdrop-blur-md shadow-[0_-4px_25px_0_rgba(0,0,0,0.06)] rounded-t-2xl z-40 transition-all border-t border-zinc-200/40 dark:border-zinc-800/20">
+    <nav className="absolute bottom-0 left-0 right-0 w-full flex justify-around items-center px-4 py-2 bg-[#eceef0]/95 dark:bg-[#2d3133]/95 backdrop-blur-md shadow-[0_-4px_25px_0_rgba(0,0,0,0.06)] rounded-t-2xl z-40 transition-all border-t border-zinc-200/40 dark:border-zinc-800/20">
       
       {/* Entry tab button */}
       <button

@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Safety Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 3. Schema Shape Validators
+    function isValidAppSettings(settings) {
+      return settings is map
+        && settings.keys().hasAll(['notifications', 'currency', 'bioLock', 'theme'])
+        && settings.keys().size() == 4
+        && settings.notifications is bool
+        && settings.currency is string && settings.currency.size() <= 10
+        && settings.bioLock is bool
+        && settings.theme is string && settings.theme.size() <= 10;
+    }
+
+    function isValidUserProfile(user) {
+      return user is map
+        && user.keys().hasAll(['name', 'email', 'avatar', 'budgetLimit', 'settings'])
+        && user.keys().size() == 5
+        && user.name is string && user.name.size() <= 100
+        && user.email is string && user.email.size() <= 200
+        && user.avatar is string && user.avatar.size() <= 500
+        && user.budgetLimit is number && user.budgetLimit >= 0
+        && isValidAppSettings(user.settings);
+    }
+
+    function isValidTransaction(tx) {
+      return tx is map
+        && tx.keys().hasAll(['id', 'title', 'amount', 'type', 'category', 'date', 'time'])
+        && tx.keys().size() == 7
+        && tx.id is string && tx.id.size() <= 128
+        && tx.title is string && tx.title.size() <= 200
+        && tx.amount is number && tx.amount >= 0
+        && tx.type is string && (tx.type == 'expense' || tx.type == 'income')
+        && tx.category is string && tx.category.size() <= 50
+        && tx.date is string && tx.date.size() <= 20
+        && tx.time is string && tx.time.size() <= 20;
+    }
+
+    // 4. Matches & Collection Paths
+    
+    // User Profiles
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUserProfile(incoming());
+      allow update: if isOwner(userId) && isValidUserProfile(incoming())
+        && incoming().email == existing().email; // Email remains immutable
+      allow delete: if isOwner(userId);
+    }
+
+    // Subcollection: Transactions
+    match /users/{userId}/transactions/{transactionId} {
+      allow list: if isOwner(userId);
+      allow get: if isOwner(userId) && isValidId(transactionId);
+      allow create: if isOwner(userId) && isValidId(transactionId) && isValidTransaction(incoming());
+      allow update: if isOwner(userId) && isValidId(transactionId) && isValidTransaction(incoming())
+        && incoming().id == existing().id; // Transaction reference keys must be immutable
+      allow delete: if isOwner(userId) && isValidId(transactionId);
+    }
+  }
+}

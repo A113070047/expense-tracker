@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { User, Mail, Lock, Eye, EyeOff, Wallet, ShieldCheck, ArrowLeft, CheckCircle, KeyRound, Info } from 'lucide-react';
+import { User, Mail, Lock, Eye, EyeOff, Wallet, ShieldCheck, ArrowLeft, CheckCircle, KeyRound, Info, Database, AlertTriangle } from 'lucide-react';
 import { UserProfile } from '../types';
 import { AccountDatabase } from '../services/db';
+import { 
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signInWithPopup, 
+  sendPasswordResetEmail, 
+  updateProfile 
+} from 'firebase/auth';
+import { doc, setDoc } from 'firebase/firestore';
+import { db, auth, isFirebaseEnabled, googleProvider, firebaseConfig } from '../services/firebase';
 
 interface AuthViewProps {
   onLoginSuccess: (profile: UserProfile) => void;
@@ -34,13 +43,19 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
   const [confirmPassword, setConfirmPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
   // Forgot password specific sub-states
   const [forgotEmail, setForgotEmail] = useState<string>('');
   const [resetEmailSent, setResetEmailSent] = useState<boolean>(false);
+  const [firebaseError, setFirebaseError] = useState<{ type: 'email' | 'google' | 'general'; message: string; code?: string } | null>(null);
 
-  // Dynamically load Google Sign-In SDK (Google Identity Services)
+  const firebaseActive = isFirebaseEnabled();
+
+  // Dynamically load Google GSI only if Firebase is not active (or as side fallback)
   useEffect(() => {
+    if (firebaseActive) return; // For Firebase, we prefer signInWithPopup directly!
+
     let script = document.querySelector('script[src="https://accounts.google.com/gsi/client"]') as HTMLScriptElement;
     if (!script) {
       script = document.createElement('script');
@@ -81,7 +96,6 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
       }
     };
 
-    // Periodically check if GIS library loaded successfully, then boot it
     const checkInterval = setInterval(() => {
       if ((window as any).google?.accounts?.id) {
         initGoogleGSI();
@@ -90,36 +104,185 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
     }, 500);
 
     return () => clearInterval(checkInterval);
-  }, [isSignUpMode, isForgotPasswordMode]);
+  }, [isSignUpMode, isForgotPasswordMode, firebaseActive]);
 
-  // Trigger local credential auth action
-  const handleSubmit = (e: React.FormEvent) => {
+  // Trigger Auth Submit
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFirebaseError(null);
     
     if (!email.trim() || !password) {
       alert('請填寫所有欄位！');
       return;
     }
 
+    setIsLoading(true);
+
     if (isSignUpMode) {
       if (password !== confirmPassword) {
         alert('兩次輸入的密碼不一致！請重新確認。');
+        setIsLoading(false);
         return;
       }
       
-      const res = AccountDatabase.register(email, password, username);
-      if (res.success && res.user) {
-        onLoginSuccess(res.user);
+      if (firebaseActive) {
+        try {
+          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+          const user = userCredential.user;
+          await updateProfile(user, { displayName: username });
+          
+          // Seed initial profile document in firestore
+          await setDoc(doc(db, "users", user.uid), {
+            name: username || '新使用者',
+            email: email,
+            avatar: '',
+            budgetLimit: 10000,
+            settings: {
+              notifications: true,
+              currency: 'USD',
+              bioLock: true,
+              theme: 'light'
+            }
+          });
+
+          onLoginSuccess({
+            email: user.email || '',
+            name: username || '新使用者',
+            avatar: ''
+          });
+        } catch (error: any) {
+          console.error(error);
+          if (error.code === 'auth/operation-not-allowed' || error.message?.includes('operation-not-allowed')) {
+            setFirebaseError({
+              type: 'email',
+              code: 'auth/operation-not-allowed',
+              message: '這個 Firebase 專案的「電子郵件/密碼 (Email/Password)」登入提供者尚未啟用。'
+            });
+          } else {
+            setFirebaseError({
+              type: 'general',
+              message: 'Firebase 註冊失敗: ' + (error.message || error)
+            });
+          }
+        } finally {
+          setIsLoading(false);
+        }
       } else {
-        alert(res.message);
+        const res = AccountDatabase.register(email, password, username);
+        setIsLoading(false);
+        if (res.success && res.user) {
+          onLoginSuccess(res.user);
+        } else {
+          alert(res.message);
+        }
       }
     } else {
-      const res = AccountDatabase.login(email, password);
-      if (res.success && res.user) {
-        onLoginSuccess(res.user);
+      if (firebaseActive) {
+        try {
+          const userCredential = await signInWithEmailAndPassword(auth, email, password);
+          const user = userCredential.user;
+          onLoginSuccess({
+            email: user.email || '',
+            name: user.displayName || '使用者',
+            avatar: user.photoURL || ''
+          });
+        } catch (error: any) {
+          console.error(error);
+          if (error.code === 'auth/operation-not-allowed' || error.message?.includes('operation-not-allowed')) {
+            setFirebaseError({
+              type: 'email',
+              code: 'auth/operation-not-allowed',
+              message: '這個 Firebase 專案的「電子郵件/密碼 (Email/Password)」登入提供者尚未啟用。'
+            });
+          } else {
+            setFirebaseError({
+              type: 'general',
+              message: 'Firebase 登入失敗: ' + (error.message || error)
+            });
+          }
+        } finally {
+          setIsLoading(false);
+        }
       } else {
-        alert(res.message);
+        const res = AccountDatabase.login(email, password);
+        setIsLoading(false);
+        if (res.success && res.user) {
+          onLoginSuccess(res.user);
+        } else {
+          alert(res.message);
+        }
       }
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) {
+      alert('請填寫電子郵件！');
+      return;
+    }
+
+    setIsLoading(true);
+    if (firebaseActive) {
+      try {
+        await sendPasswordResetEmail(auth, forgotEmail.trim());
+        setResetEmailSent(true);
+      } catch (error: any) {
+        alert('密碼重設郵件發送失敗: ' + (error.message || error));
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
+      setTimeout(() => {
+        setResetEmailSent(true);
+        setIsLoading(false);
+      }, 700);
+    }
+  };
+
+  const handleFirebaseGoogleClick = async () => {
+    if (!firebaseActive) return;
+    setIsLoading(true);
+    setFirebaseError(null);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+      
+      // Upsert / merging profile on Google Sign-In
+      await setDoc(doc(db, "users", user.uid), {
+        name: user.displayName || 'Google 使用者',
+        email: user.email || '',
+        avatar: user.photoURL || '',
+        budgetLimit: 10000,
+        settings: {
+          notifications: true,
+          currency: 'USD',
+          bioLock: true,
+          theme: 'light'
+        }
+      }, { merge: true });
+
+      onLoginSuccess({
+        email: user.email || '',
+        name: user.displayName || 'Google 使用者',
+        avatar: user.photoURL || ''
+      });
+    } catch (error: any) {
+      console.error(error);
+      if (error.code === 'auth/operation-not-allowed' || error.message?.includes('operation-not-allowed')) {
+        setFirebaseError({
+          type: 'google',
+          code: 'auth/operation-not-allowed',
+          message: '這個 Firebase 專案的「Google」登入服務尚未啟用。'
+        });
+      } else {
+        setFirebaseError({
+          type: 'general',
+          message: 'Google 登入失敗: ' + (error.message || error)
+        });
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -157,7 +320,9 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
             重設密碼
           </h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 font-semibold text-center leading-relaxed">
-            輸入您的帳號電子郵件，我們將為您寄出安全密碼重設連結。
+            {firebaseActive 
+              ? '輸入您的電子郵件，我們將為您寄出安全密碼重設連結。'
+              : '【模擬模式】輸入任何電子郵件，系統將直接完成密碼重設模擬。'}
           </p>
         </header>
 
@@ -180,10 +345,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
           </div>
         ) : (
           <form 
-            onSubmit={(e) => {
-              e.preventDefault();
-              setResetEmailSent(true);
-            }} 
+            onSubmit={handleResetPassword} 
             className="flex flex-col gap-4 mb-6"
           >
             <div className="relative w-full">
@@ -197,14 +359,16 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                 className="w-full h-14 pl-12 pr-4 bg-white dark:bg-[#1a1c1e] border border-zinc-200 dark:border-zinc-800 rounded-2xl font-bold text-sm text-zinc-800 dark:text-zinc-150 placeholder-zinc-400 outline-none focus:border-[#ff7f50] focus:ring-1 focus:ring-[#ff7f50] transition-all duration-200"
                 placeholder="請輸入電子郵件"
                 required
+                disabled={isLoading}
               />
             </div>
 
             <button
               type="submit"
+              disabled={isLoading}
               className="w-full h-14 bg-[#ff7f50] text-[#6c2000] font-bold text-base rounded-2xl shadow-sm hover:opacity-95 active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-1.5"
             >
-              發送重設驗證信
+              {isLoading ? '處理中...' : '發送重設驗證信'}
             </button>
           </form>
         )}
@@ -232,15 +396,29 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
   return (
     <div className="min-h-[100dvh] flex flex-col justify-center max-w-md mx-auto relative px-5 py-8 bg-[#f7f9fb] dark:bg-[#191c1e] text-[#191c1e] dark:text-white transition-colors select-none animate-fade-in">
       
+      {/* Top Database Status Indicator Badge */}
+      <div className={`p-2.5 rounded-2xl mb-4 flex items-center gap-2 border text-[11px] font-bold leading-normal transition-all ${
+        firebaseActive 
+          ? 'bg-emerald-500/10 border-emerald-500/15 text-emerald-750 dark:text-emerald-400' 
+          : 'bg-amber-500/10 border-amber-500/15 text-[#8f5a00] dark:text-amber-400'
+      }`}>
+        <Database className="w-4 h-4 flex-shrink-0 animate-pulse" />
+        <div>
+          {firebaseActive 
+            ? '🚀 雲端雲端連線：已成功對接 Firebase 雲端資料庫系統！' 
+            : '⚠️ 正在使用本地快速預覽儲存（未於 firebase-applet-config.json 設定金鑰）'}
+        </div>
+      </div>
+
       {/* Brand Header */}
-      <header className="flex flex-col items-center justify-center mb-6 gap-2 mt-4">
+      <header className="flex flex-col items-center justify-center mb-5 gap-2 mt-2">
         <div className="w-16 h-16 rounded-3xl bg-[#ff7f50] flex items-center justify-center text-white shadow-md shadow-[#ff7f50]/15">
           <Wallet className="w-10 h-10 stroke-[2px]" />
         </div>
-        <h1 className="text-3xl font-extrabold text-[#a43c12] dark:text-[#ffb59c] text-center tracking-tight mt-2">
+        <h1 className="text-2xl font-extrabold text-[#a43c12] dark:text-[#ffb59c] text-center tracking-tight mt-1">
           {isSignUpMode ? '註冊新帳號' : 'Quick Expense'}
         </h1>
-        <p className="text-sm text-zinc-500 font-semibold text-center">
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 font-semibold text-center">
           {isSignUpMode ? '加入 Quick Expense 聰明記帳' : '掌握每一分錢的流向'}
         </p>
       </header>
@@ -248,27 +426,78 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
       {/* Guest bypass banner helper */}
       <div 
         onClick={handleGoogleBypass}
-        className="mb-6 bg-[#ff7f50]/15 border border-[#ff7f50]/20 p-3 rounded-2xl text-center text-[#a43c12] dark:text-[#ffb59c] text-xs font-bold cursor-pointer active:scale-95 hover:opacity-90 transition-all flex items-center justify-center gap-1.5"
+        className="mb-5 bg-[#ff7f50]/15 border border-[#ff7f50]/20 p-2.5 rounded-2xl text-center text-[#a43c12] dark:text-[#ffb59c] text-xs font-bold cursor-pointer active:scale-95 hover:opacity-90 transition-all flex items-center justify-center gap-1.5"
       >
         🌟 <span>開發人員測試：按此快速登入體驗</span>
       </div>
 
+      {/* Detailed Diagnostic Warning Banner for operation-not-allowed */}
+      {firebaseError && (
+        <div className="mb-5 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/15 text-[#8f5a00] dark:text-amber-400 text-xs font-semibold leading-relaxed animate-fade-in flex flex-col gap-2.5">
+          <div className="flex items-center gap-2 font-bold text-[13px] text-[#a43c12] dark:text-amber-300">
+            <AlertTriangle className="w-4.5 h-4.5 flex-shrink-0 text-amber-500 dark:text-amber-400" />
+            <span>
+              {firebaseError.code === 'auth/operation-not-allowed' 
+                ? '⚠️ 登入功能尚未在 Firebase 啟用' 
+                : '✕ 發生驗證錯誤'}
+            </span>
+          </div>
+          <p className="text-zinc-650 dark:text-zinc-300 leading-normal font-medium">
+            {firebaseError.message}
+          </p>
+          
+          {firebaseError.code === 'auth/operation-not-allowed' && (
+            <div className="mt-1 p-3 bg-white/60 dark:bg-black/30 rounded-xl text-[11px] leading-relaxed flex flex-col gap-1.5 border border-amber-500/10">
+              <span className="font-extrabold text-[#a43c12] dark:text-amber-200">
+                🛠️ 解決步驟：
+              </span>
+              <ol className="list-decimal pl-4.5 space-y-1 text-zinc-650 dark:text-zinc-300 font-medium">
+                <li>
+                  前往{' '}
+                  <a 
+                    href={
+                      firebaseConfig.projectId 
+                        ? `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/providers` 
+                        : 'https://console.firebase.google.com/'
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline text-orange-650 dark:text-orange-400 font-extrabold hover:opacity-85 text-[#a43c12]"
+                  >
+                    Firebase Console 設定頁面 ↗
+                  </a>
+                </li>
+                <li>點選 <strong>Sign-in method</strong> (登入方法) 分頁</li>
+                <li>點擊 <strong>Add new provider</strong> (新增提供者)</li>
+                <li>
+                  將 <strong>{firebaseError.type === 'email' ? '電子郵件/密碼 (Email/Password)' : 'Google'}</strong> 提供者設為「啟用」並儲存。
+                </li>
+              </ol>
+              <div className="mt-1.5 text-[10px] text-zinc-500 dark:text-zinc-400 leading-normal border-t border-zinc-250 dark:border-zinc-700/30 pt-1.5">
+                💡 <strong>提示：</strong> 您也可以直接點擊上方的 <strong>「開發人員體驗：按此快速登入體驗」</strong> 按鈕，即可快速略過雲端驗證，直接在本地模擬模式體驗完整功能。
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Auth Entry Form */}
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4 mb-6">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-3.5 mb-5">
         
         {/* Username for Signup mode only */}
         {isSignUpMode && (
           <div className="relative w-full">
             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-400">
-              <User className="w-5 h-5" />
+              <User className="w-4.5 h-4.5" />
             </div>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full h-14 pl-12 pr-4 bg-white dark:bg-[#1a1c1e] border border-zinc-200 dark:border-zinc-800 rounded-2xl font-bold text-sm text-zinc-800 dark:text-zinc-150 placeholder-zinc-400 outline-none focus:border-[#ff7f50] focus:ring-1 focus:ring-[#ff7f50] transition-all duration-200"
+              className="w-full h-12.5 pl-11 pr-4 bg-white dark:bg-[#1a1c1e] border border-zinc-200 dark:border-zinc-805/70 rounded-xl font-bold text-xs text-zinc-800 dark:text-zinc-150 placeholder-zinc-400 outline-none focus:border-[#ff7f50] focus:ring-1 focus:ring-[#ff7f50] transition-all duration-200"
               placeholder="使用者名稱"
               required={isSignUpMode}
+              disabled={isLoading}
             />
           </div>
         )}
@@ -276,66 +505,69 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
         {/* Email entry field */}
         <div className="relative w-full">
           <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-400">
-            <Mail className="w-5 h-5" />
+            <Mail className="w-4.5 h-4.5" />
           </div>
           <input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full h-14 pl-12 pr-4 bg-white dark:bg-[#1a1c1e] border border-zinc-200 dark:border-zinc-800 rounded-2xl font-bold text-sm text-zinc-800 dark:text-zinc-150 placeholder-zinc-400 outline-none focus:border-[#ff7f50] focus:ring-1 focus:ring-[#ff7f50] transition-all duration-200"
+            className="w-full h-12.5 pl-11 pr-4 bg-white dark:bg-[#1a1c1e] border border-zinc-200 dark:border-zinc-805/70 rounded-xl font-bold text-xs text-zinc-800 dark:text-zinc-150 placeholder-zinc-400 outline-none focus:border-[#ff7f50] focus:ring-1 focus:ring-[#ff7f50] transition-all duration-200"
             placeholder="電子郵件"
             required
+            disabled={isLoading}
           />
         </div>
 
         {/* Password entry field */}
         <div className="relative w-full">
           <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-400 animate-fade-in">
-            <Lock className="w-5 h-5" />
+            <Lock className="w-4.5 h-4.5" />
           </div>
           <input
             type={showPassword ? 'text' : 'password'}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full h-14 pl-12 pr-12 bg-white dark:bg-[#1a1c1e] border border-zinc-200 dark:border-zinc-800 rounded-2xl font-bold text-sm text-zinc-800 dark:text-zinc-150 placeholder-zinc-400 outline-none focus:border-[#ff7f50] focus:ring-1 focus:ring-[#ff7f50] transition-all duration-200"
+            className="w-full h-12.5 pl-11 pr-11 bg-white dark:bg-[#1a1c1e] border border-zinc-200 dark:border-zinc-805/70 rounded-xl font-bold text-xs text-zinc-800 dark:text-zinc-150 placeholder-zinc-400 outline-none focus:border-[#ff7f50] focus:ring-1 focus:ring-[#ff7f50] transition-all duration-200"
             placeholder={isSignUpMode ? '設定密碼' : '輸入您的密碼'}
             required
+            disabled={isLoading}
           />
           <button
             type="button"
             onClick={() => setShowPassword(!showPassword)}
-            className="absolute inset-y-0 right-0 pr-4 flex items-center text-zinc-400 hover:text-[#a43c12] dark:hover:text-[#ffb59c] transition-colors cursor-pointer"
+            className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-zinc-400 hover:text-[#a43c12] dark:hover:text-[#ffb59c] transition-colors cursor-pointer"
           >
-            {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+            {showPassword ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
           </button>
         </div>
 
-        {/* Confirm password field for Signup mode with DISTINCT confirm icon and independent visibility togglers */}
+        {/* Confirm password field for Signup mode */}
         {isSignUpMode && (
           <div className="relative w-full animate-fade-in">
             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-zinc-400">
-              <ShieldCheck className="w-5 h-5 text-emerald-500 dark:text-emerald-400" />
+              <ShieldCheck className="w-4.5 h-4.5 text-emerald-500 dark:text-emerald-400" />
             </div>
             <input
               type={showConfirmPassword ? 'text' : 'password'}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full h-14 pl-12 pr-12 bg-white dark:bg-[#1a1c1e] border border-zinc-200 dark:border-zinc-800 rounded-2xl font-bold text-sm text-zinc-800 dark:text-zinc-150 placeholder-zinc-400 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all duration-200"
+              className="w-full h-12.5 pl-11 pr-11 bg-white dark:bg-[#1a1c1e] border border-zinc-200 dark:border-zinc-805/70 rounded-xl font-bold text-xs text-zinc-800 dark:text-zinc-150 placeholder-zinc-400 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all duration-200"
               placeholder="再輸入密碼完成確認"
               required={isSignUpMode}
+              disabled={isLoading}
             />
             <button
               type="button"
               onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-              className="absolute inset-y-0 right-0 pr-4 flex items-center text-zinc-400 hover:text-emerald-600 transition-colors cursor-pointer"
+              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-zinc-400 hover:text-emerald-600 transition-colors cursor-pointer"
             >
-              {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+              {showConfirmPassword ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
             </button>
           </div>
         )}
 
         {!isSignUpMode && (
-          <div className="flex justify-end pr-1 mt-0.5">
+          <div className="flex justify-end pr-1">
             <button 
               type="button" 
               onClick={() => setIsForgotPasswordMode(true)} 
@@ -349,18 +581,19 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
         {/* Submit button layout */}
         <button
           type="submit"
-          className="w-full h-14 bg-[#ff7f50] text-[#6c2000] font-bold text-base rounded-2xl shadow-sm hover:opacity-95 active:scale-[0.98] transition-all mt-3 cursor-pointer flex items-center justify-center gap-1.5"
+          disabled={isLoading}
+          className="w-full h-12.5 bg-[#ff7f50] text-[#6c2000] font-bold text-sm rounded-xl shadow-sm hover:opacity-95 active:scale-[0.98] transition-all mt-2 cursor-pointer flex items-center justify-center gap-1.5"
         >
-          {isSignUpMode ? '註冊' : '登入'}
+          {isLoading ? '請稍候...' : (isSignUpMode ? '建立帳號' : '登入')}
         </button>
 
       </form>
 
       {/* Alternative SSO Providers */}
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center w-full py-2">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center w-full py-1">
           <div className="flex-grow border-t border-zinc-200 dark:border-zinc-800/80"></div>
-          <span className="flex-shrink-0 mx-4 text-xs font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+          <span className="flex-shrink-0 mx-4 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
             {isSignUpMode ? '或其他註冊方式' : '或透過以下方式'}
           </span>
           <div className="flex-grow border-t border-zinc-200 dark:border-zinc-800/80"></div>
@@ -368,21 +601,36 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
 
         {/* Google SSO fully functional dynamic provider container */}
         <div className="flex flex-col gap-2">
-          <div className="w-full flex justify-center py-1">
-            <div id="google-signin-btn" className="w-full"></div>
-          </div>
+          {firebaseActive ? (
+            <button
+              type="button"
+              onClick={handleFirebaseGoogleClick}
+              disabled={isLoading}
+              className="w-full h-12.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700/80 rounded-xl font-bold text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-all flex items-center justify-center gap-2 active:scale-95 cursor-pointer shadow-sm"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <path fill="#EA4335" d="M12.24 10.285V14.4h6.887C18.2 16.56 15.645 18 12.24 18c-3.3 0-6-2.7-6-6s2.7-6 6-6c1.65 0 3.125.66 4.215 1.74l3.12-3.12C17.51 2.58 15.02 1.5 12.24 1.5c-5.79 0-10.5 4.71-10.5 10.5s4.71 10.5 10.5 10.5c5.783 0 10.5-4.717 10.5-10.5 0-.75-.075-1.462-.218-2.13H12.24z"/>
+              </svg>
+              <span>透過 Google 登入</span>
+            </button>
+          ) : (
+            <div className="w-full flex justify-center">
+              <div id="google-signin-btn" className="w-full"></div>
+            </div>
+          )}
           
-          <div className="flex gap-2 p-3 bg-zinc-50 dark:bg-zinc-800/20 border border-zinc-150/40 dark:border-zinc-800/30 rounded-2xl items-start">
-            <Info className="w-4 h-4 text-zinc-400 dark:text-zinc-500 flex-shrink-0 mt-0.5" />
+          <div className="flex gap-2 p-2 bg-zinc-50 dark:bg-zinc-800/20 border border-zinc-150/40 dark:border-zinc-800/30 rounded-xl items-start">
+            <Info className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 flex-shrink-0 mt-0.5" />
             <p className="text-[10px] text-zinc-400 dark:text-zinc-500 leading-normal">
-              本帳號服務已完美原生串接 **Google Identity Services (GSI)**。如需啟用專屬憑證驗證，請至系統專案 `.env` 中設定您的 `VITE_GOOGLE_CLIENT_ID` 參數。若點擊測試按鈕，仍能直接進入模擬驗證流程。
+              本服務已支援實體 **Firebase Auth**! 請在 `firebase-applet-config.json` 貼上您的 Web SDK 配置，登入與帳號系統即可隨即自適應轉換為高強度的
+              Google 雲端託管架構。
             </p>
           </div>
         </div>
       </div>
 
       {/* Footer redirection link toggle */}
-      <div className="mt-8 text-center bg-transparent">
+      <div className="mt-6 text-center bg-transparent">
         <button
           type="button"
           onClick={() => {
@@ -403,4 +651,5 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
     </div>
   );
 };
+
 

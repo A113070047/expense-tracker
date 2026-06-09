@@ -9,12 +9,12 @@ interface AnalyticsViewProps {
 }
 
 const CATEGORY_META: Record<Category, { name: string; icon: any; color: string; bg: string; border: string }> = {
-  [Category.HOUSING]: { name: '居住', icon: Home, color: '#ca8a04', bg: 'bg-yellow-500/10', border: 'border-l-4 border-yellow-600' },
-  [Category.FOOD]: { name: '餐飲美食', icon: Utensils, color: '#2563eb', bg: 'bg-blue-550/10', border: 'border-l-4 border-blue-600' },
-  [Category.TRANSPORT]: { name: '交通運輸', icon: Car, color: '#0d9488', bg: 'bg-teal-500/10', border: 'border-l-4 border-teal-600' },
-  [Category.SHOPPING]: { name: '生活購物', icon: ShoppingBag, color: '#16a34a', bg: 'bg-emerald-500/10', border: 'border-l-4 border-emerald-600' },
-  [Category.ENTERTAINMENT]: { name: '休閒娛樂', icon: Film, color: '#9333ea', bg: 'bg-purple-500/10', border: 'border-l-4 border-purple-600' },
-  [Category.OTHERS]: { name: '其他雜項', icon: MoreHorizontal, color: '#db2777', bg: 'bg-rose-500/10', border: 'border-l-4 border-rose-600' }
+  [Category.HOUSING]: { name: '居住', icon: Home, color: '#f59e0b', bg: 'bg-amber-500/10', border: 'border-l-4 border-amber-500' },
+  [Category.FOOD]: { name: '餐飲', icon: Utensils, color: '#ff7f50', bg: 'bg-[#ff7f50]/10', border: 'border-l-4 border-[#ff7f50]' },
+  [Category.TRANSPORT]: { name: '交通', icon: Car, color: '#6366f1', bg: 'bg-indigo-500/10', border: 'border-l-4 border-indigo-500' },
+  [Category.SHOPPING]: { name: '購物', icon: ShoppingBag, color: '#10b981', bg: 'bg-emerald-500/10', border: 'border-l-4 border-emerald-500' },
+  [Category.ENTERTAINMENT]: { name: '娛樂', icon: Film, color: '#a855f7', bg: 'bg-purple-500/10', border: 'border-l-4 border-purple-500' },
+  [Category.OTHERS]: { name: '其他', icon: MoreHorizontal, color: '#71717a', bg: 'bg-zinc-500/10', border: 'border-l-4 border-zinc-500' }
 };
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
@@ -77,6 +77,42 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     };
   });
 
+  // Calculate dynamic 2D coordinates for category labels orbiting the Donut ring
+  let cumulativeLabelOffset = 0;
+  const labelsToRender = sortedCategories.map((item, idx) => {
+    const percent = item.percent;
+    const startOffset = cumulativeLabelOffset;
+    const midPercent = startOffset + percent / 2;
+    cumulativeLabelOffset += percent;
+
+    // Convert percentage to Visual degrees (where 0% starts at top going clockwise)
+    const angleDeg = (midPercent / 100) * 360 - 90;
+    const angleRad = (angleDeg * Math.PI) / 180;
+
+    // Stagger the labels so they never overlap. Alternate orbits from center based on index!
+    const L = idx % 2 === 0 ? 38 : 55;
+    
+    // Convert to percentage coordinates, safely clamped to prevent boundary overflow
+    const x = Math.max(12, Math.min(88, 50 + Math.cos(angleRad) * L));
+    const y = Math.max(12, Math.min(88, 50 + Math.sin(angleRad) * L));
+
+    const meta = CATEGORY_META[item.category] || {
+      name: '其他',
+      icon: MoreHorizontal,
+      color: '#71717a'
+    };
+
+    return {
+      category: item.category,
+      name: meta.name,
+      icon: meta.icon,
+      color: meta.color,
+      percent,
+      x,
+      y
+    };
+  });
+
   return (
     <div className="flex-grow flex flex-col gap-6 pb-8">
       
@@ -101,8 +137,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           </div>
         </div>
 
-        {/* 2. Custom Responsive SVG Donut Chart */}
-        <div className="relative w-60 h-60 flex items-center justify-center my-4">
+        {/* 2. Custom Responsive SVG Donut Chart with Dynamic outer orbiting labels */}
+        <div className="relative w-64 h-64 min-[375px]:w-72 min-[375px]:h-72 flex items-center justify-center my-4 select-none">
           {totalExpense === 0 ? (
             // Default placeholder when no expenses exist
             <svg className="w-full h-full -rotate-90 animate-fade-in" viewBox="0 0 42 42">
@@ -143,36 +179,46 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           )}
 
           {/* Centered label */}
-          <div className="absolute flex flex-col items-center text-center">
-            <span className="text-xs font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+          <div className="absolute flex flex-col items-center text-center bg-white/40 dark:bg-[#1a1c1e]/40 p-2 rounded-full backdrop-blur-[1px]">
+            <span className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
               日均支出
             </span>
-            <span className="text-2xl font-extrabold text-zinc-800 dark:text-white">
+            <span className="text-xl min-[360px]:text-2xl font-black text-zinc-800 dark:text-white mt-0.5 leading-none">
               {currencySymbol}{dailyAverage}
             </span>
           </div>
 
-          {/* Dynamic Category Labels Overlaid on visual corners as shown in user's mockup */}
-          {donutSectors.slice(0, 3).map((sec, idx) => {
-            // Placement coordinates based on sector indices to distribute nicely
-            const placements = [
-              '-right-2 top-10', // index 0 top-right
-              '-left-3 bottom-12',  // index 1 bottom-left
-              '-left-2 top-10'       // index 2 top-left
-            ];
+          {/* Dynamic Category Labels with vector icons distributed according to respective ratios */}
+          {labelsToRender.map((sec) => {
+            const IconComponent = sec.icon;
 
             return (
               <div 
                 key={sec.category} 
-                className={`absolute bg-white/90 dark:bg-zinc-950/90 backdrop-blur-sm p-1.5 px-2 rounded-xl border shadow-sm flex flex-col ${placements[idx] || 'hidden'}`}
-                style={{ borderColor: sec.color }}
+                className="absolute bg-white/95 dark:bg-[#1f2123]/95 backdrop-blur-md p-1.5 px-2 min-[360px]:px-2.5 rounded-xl border border-zinc-200/60 dark:border-zinc-800/80 shadow-[0_4px_10px_rgba(0,0,0,0.06)] flex items-center gap-1.5 transition-all duration-200 hover:scale-105 active:scale-95"
+                style={{ 
+                  left: `${sec.x}%`, 
+                  top: `${sec.y}%`,
+                  transform: 'translate(-50%, -50%)',
+                  boxShadow: `0 3px 8px ${sec.color}15`
+                }}
               >
-                <span className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 leading-none">
-                  {sec.name}
-                </span>
-                <span className="text-xs font-black text-zinc-800 dark:text-white leading-none mt-0.5">
-                  {sec.percent}%
-                </span>
+                {/* Micro Icon */}
+                <div 
+                  className="w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0"
+                  style={{ backgroundColor: `${sec.color}18`, color: sec.color }}
+                >
+                  <IconComponent className="w-2.5 h-2.5" />
+                </div>
+                {/* Name & value details */}
+                <div className="flex flex-col items-start leading-[1.1]">
+                  <span className="text-[9px] font-black text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+                    {sec.name}
+                  </span>
+                  <span className="text-[10px] font-black text-zinc-805 dark:text-zinc-100 font-mono">
+                    {sec.percent}%
+                  </span>
+                </div>
               </div>
             );
           })}
@@ -277,7 +323,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             下個月可多省下 {currencySymbol}450
           </h4>
           <p className="text-xs text-[#76f3ea] mt-0.5 font-medium opacity-90">
-            只需減少「餐飲美食」支出 15% 即可達成此理財目標
+            只需減少「餐飲」支出 15% 即可達成此理財目標
           </p>
         </div>
       </div>

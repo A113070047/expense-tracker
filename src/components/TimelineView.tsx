@@ -11,12 +11,12 @@ interface TimelineViewProps {
 }
 
 const CATEGORY_STYLE_MAP: Record<Category, { name: string; icon: any; bg: string; text: string }> = {
-  [Category.FOOD]: { name: '餐飲美食', icon: Utensils, bg: 'bg-[#ff7f50]/10', text: 'text-[#a43c12]' },
-  [Category.TRANSPORT]: { name: '交通運輸', icon: Car, bg: 'bg-indigo-500/10', text: 'text-indigo-600' },
-  [Category.SHOPPING]: { name: '購物百貨', icon: ShoppingBag, bg: 'bg-emerald-500/10', text: 'text-emerald-600' },
-  [Category.ENTERTAINMENT]: { name: '娛樂休閒', icon: Film, bg: 'bg-purple-500/10', text: 'text-purple-600' },
-  [Category.HOUSING]: { name: '居家居住', icon: Home, bg: 'bg-amber-100 dark:bg-amber-950/20', text: 'text-amber-700' },
-  [Category.OTHERS]: { name: '其他支出', icon: MoreHorizontal, bg: 'bg-zinc-100 dark:bg-zinc-800', text: 'text-zinc-600' }
+  [Category.FOOD]: { name: '餐飲', icon: Utensils, bg: 'bg-[#ff7f50]/10', text: 'text-[#a43c12]' },
+  [Category.TRANSPORT]: { name: '交通', icon: Car, bg: 'bg-indigo-500/10', text: 'text-indigo-600' },
+  [Category.SHOPPING]: { name: '購物', icon: ShoppingBag, bg: 'bg-emerald-500/10', text: 'text-emerald-600' },
+  [Category.ENTERTAINMENT]: { name: '娛樂', icon: Film, bg: 'bg-purple-500/10', text: 'text-purple-600' },
+  [Category.HOUSING]: { name: '居住', icon: Home, bg: 'bg-amber-100 dark:bg-amber-950/20', text: 'text-amber-700' },
+  [Category.OTHERS]: { name: '其他', icon: MoreHorizontal, bg: 'bg-zinc-100 dark:bg-zinc-800', text: 'text-zinc-600' }
 };
 
 export const TimelineView: React.FC<TimelineViewProps> = ({

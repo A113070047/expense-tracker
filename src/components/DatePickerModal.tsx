@@ -18,13 +18,26 @@ export const DatePickerModal: React.FC<DatePickerModalProps> = ({
 
   // Parse initialDate
   const parsedDate = new Date(initialDate);
-  const initialYear = isNaN(parsedDate.getTime()) ? 2026 : parsedDate.getFullYear();
-  const initialMonth = isNaN(parsedDate.getTime()) ? 4 : parsedDate.getMonth(); // 0-indexed
-  const initialDay = isNaN(parsedDate.getTime()) ? 21 : parsedDate.getDate();
+  const initialYear = isNaN(parsedDate.getTime()) ? new Date().getFullYear() : parsedDate.getFullYear();
+  const initialMonth = isNaN(parsedDate.getTime()) ? new Date().getMonth() : parsedDate.getMonth(); // 0-indexed
+  const initialDay = isNaN(parsedDate.getTime()) ? new Date().getDate() : parsedDate.getDate();
 
   const [currentYear, setCurrentYear] = useState<number>(initialYear);
   const [currentMonth, setCurrentMonth] = useState<number>(initialMonth); // 0 = Jan, 11 = Dec
   const [selectedDay, setSelectedDay] = useState<number>(initialDay);
+
+  // Keep state in sync when modal is opened on a new or changed date
+  React.useEffect(() => {
+    if (isOpen) {
+      const d = new Date(initialDate);
+      const y = isNaN(d.getTime()) ? new Date().getFullYear() : d.getFullYear();
+      const m = isNaN(d.getTime()) ? new Date().getMonth() : d.getMonth();
+      const dayVal = isNaN(d.getTime()) ? new Date().getDate() : d.getDate();
+      setCurrentYear(y);
+      setCurrentMonth(m);
+      setSelectedDay(dayVal);
+    }
+  }, [isOpen, initialDate]);
 
   // Month names in Traditional Chinese
   const monthNames = [

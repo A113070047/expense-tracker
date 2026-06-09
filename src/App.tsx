@@ -9,64 +9,87 @@ import { AnalyticsView } from './components/AnalyticsView';
 import { SettingsView } from './components/SettingsView';
 import { AuthView } from './components/AuthView';
 import { AccountDatabase } from './services/db';
+import { 
+  auth, 
+  db, 
+  isFirebaseEnabled, 
+  handleFirestoreError, 
+  OperationType 
+} from './services/firebase';
+import { onAuthStateChanged, signOut, updateProfile } from 'firebase/auth';
+import { doc, collection, onSnapshot, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 
 export default function App() {
-  // 1. Core Profile Session state
-  const [authProfile, setAuthProfile] = useState<UserProfile | null>(() => {
-    // If a current user exists in session records, use that
+  const firebaseActive = isFirebaseEnabled();
+
+  // A helper function to get correct initial user data from local database
+  const getInitialUserData = () => {
+    if (isFirebaseEnabled()) {
+      return {
+        profile: null,
+        transactions: INITIAL_TRANSACTIONS,
+        budgetLimit: 10000,
+        settings: {
+          notifications: true,
+          currency: 'USD' as const,
+          bioLock: true,
+          theme: 'light' as const
+        }
+      };
+    }
     const sessionEmail = AccountDatabase.getCurrentUserEmail();
-    if (sessionEmail) {
-      const dbUser = AccountDatabase.getUserByEmail(sessionEmail);
-      if (dbUser) {
-        return {
+    const emailToUse = sessionEmail || 'alex.t@clarity.finance';
+    const dbUser = AccountDatabase.getUserByEmail(emailToUse);
+    if (dbUser) {
+      return {
+        profile: {
           name: dbUser.name,
           email: dbUser.email,
           avatar: dbUser.avatar
-        };
-      }
-    }
-    
-    try {
-      const saved = localStorage.getItem('qe_profile');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && parsed.email) {
-          // Sync with DB
-          const dbUser = AccountDatabase.getUserByEmail(parsed.email);
-          if (dbUser) {
-            return { name: dbUser.name, email: dbUser.email, avatar: dbUser.avatar };
-          }
-          return parsed;
+        },
+        transactions: dbUser.transactions || [],
+        budgetLimit: dbUser.budgetLimit ?? 10000,
+        settings: dbUser.settings || {
+          notifications: true,
+          currency: 'USD' as const,
+          bioLock: true,
+          theme: 'light' as const
         }
-      }
-    } catch (e) {
-      console.warn("Storage profile load restriction, returning fallback default user:", e);
+      };
     }
-    
-    // Start with default profile of Alex Thompson so app is fully ready
     return {
-      name: 'Alex Thompson',
-      email: 'alex.t@clarity.finance',
-      avatar: ''
+      profile: {
+        name: 'Alex Thompson',
+        email: 'alex.t@clarity.finance',
+        avatar: ''
+      },
+      transactions: INITIAL_TRANSACTIONS,
+      budgetLimit: 10000,
+      settings: {
+        notifications: true,
+        currency: 'USD' as const,
+        bioLock: true,
+        theme: 'light' as const
+      }
     };
-  });
+  };
+
+  const initialData = getInitialUserData();
+
+  // 1. Core Profile Session state
+  const [authProfile, setAuthProfile] = useState<UserProfile | null>(initialData.profile);
 
   // 2. Active View Tab routing state
   const [activeTab, setActiveTab] = useState<AppTab>(AppTab.TIMELINE);
 
   // 3. Transactions dataset state
-  const [transactions, setTransactions] = useState<Transaction[]>(INITIAL_TRANSACTIONS);
+  const [transactions, setTransactions] = useState<Transaction[]>(initialData.transactions);
 
   // 4. Monthly budget target limits
-  const [budgetLimit, setBudgetLimit] = useState<number>(10000);
+  const [budgetLimit, setBudgetLimit] = useState<number>(initialData.budgetLimit);
 
   // 5. Shared preferences configurations
-  const [settings, setSettings] = useState<AppSettings>({
-    notifications: true,
-    currency: 'USD',
-    bioLock: true,
-    theme: 'light'
-  });
+  const [settings, setSettings] = useState<AppSettings>(initialData.settings);
 
   // --- Synchronization Side-effects ---
   
@@ -79,55 +102,104 @@ export default function App() {
     }
   }, [settings.theme]);
 
-  // B. Switch loaded data whenever a user logs in / changes session
+  // B. Firebase Auth state listener subscription
   useEffect(() => {
-    if (authProfile) {
-      try {
-        localStorage.setItem('qe_profile', JSON.stringify(authProfile));
-      } catch (e) {
-        console.warn("localStorage setItem error for qe_profile:", e);
-      }
-      AccountDatabase.setCurrentUserEmail(authProfile.email);
-      // Fetch details from multiuser database system if user account exists
-      const dbUser = AccountDatabase.getUserByEmail(authProfile.email);
-      if (dbUser) {
-        setTransactions(dbUser.transactions || []);
-        setBudgetLimit(dbUser.budgetLimit ?? 10000);
-        setSettings(dbUser.settings || {
-          notifications: true,
-          currency: 'USD',
-          bioLock: true,
-          theme: 'light'
-        });
-      }
-    } else {
-      try {
-        localStorage.removeItem('qe_profile');
-      } catch (e) {
-        console.warn("localStorage removeItem error for qe_profile:", e);
-      }
-      AccountDatabase.setCurrentUserEmail(null);
-    }
-  }, [authProfile]);
+    if (!firebaseActive) return;
 
-  // C. Save custom budget limit, transactions, and settings updates back to the multiuser database automatically
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setAuthProfile({
+          name: user.displayName || '使用者',
+          email: user.email || '',
+          avatar: user.photoURL || ''
+        });
+      } else {
+        setAuthProfile(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [firebaseActive]);
+
+  // C. Firebase Firestore collections real-time listener subscription
   useEffect(() => {
-    if (authProfile) {
-      AccountDatabase.saveUserData(authProfile.email, {
-        transactions,
-        budgetLimit,
-        settings,
-        name: authProfile.name,
-        avatar: authProfile.avatar
+    if (!firebaseActive || !authProfile || !auth?.currentUser) return;
+
+    const uid = auth.currentUser.uid;
+    const userDocRef = doc(db, "users", uid);
+    const txColRef = collection(db, "users", uid, "transactions");
+
+    // Profile & settings changes observer
+    const unsubProfile = onSnapshot(userDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.budgetLimit !== undefined) {
+          setBudgetLimit(data.budgetLimit);
+        }
+        if (data.settings) {
+          setSettings(data.settings);
+        }
+        // Real-time synchronization of Profile attributes (Name & Avatar) from DB
+        if (data.name || data.avatar !== undefined) {
+          setAuthProfile((prev) => {
+            if (!prev) return null;
+            if (prev.name === data.name && prev.avatar === data.avatar) return prev;
+            return {
+              ...prev,
+              name: data.name || prev.name,
+              avatar: data.avatar || prev.avatar || ''
+            };
+          });
+        }
+      } else {
+        // Automatic setup for first time users
+        const nameToUse = auth.currentUser?.displayName || authProfile.name || '使用者';
+        setDoc(userDocRef, {
+          name: nameToUse,
+          email: authProfile.email,
+          avatar: authProfile.avatar,
+          budgetLimit: 10000,
+          settings: {
+            notifications: true,
+            currency: 'USD',
+            bioLock: true,
+            theme: 'light'
+          }
+        }).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${uid}`));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, `users/${uid}`);
+    });
+
+    // Transactions changes observer
+    const unsubTx = onSnapshot(txColRef, (querySnap) => {
+      const txs: Transaction[] = [];
+      querySnap.forEach((doc) => {
+        txs.push(doc.data() as Transaction);
       });
-    }
-  }, [authProfile, transactions, budgetLimit, settings]);
+      // Order descending like local database storage
+      txs.sort((a, b) => {
+        const dateCompare = b.date.localeCompare(a.date);
+        if (dateCompare !== 0) return dateCompare;
+        return b.time.localeCompare(a.time);
+      });
+      setTransactions(txs);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, `users/${uid}/transactions`);
+    });
+
+    return () => {
+      unsubProfile();
+      unsubTx();
+    };
+  }, [authProfile, firebaseActive]);
 
   // Dynamic currency symbol evaluation
   const getCurrencySymbol = () => {
     switch (settings.currency) {
       case 'JPY': return '¥';
       case 'EUR': return '€';
+      case 'TWD': return 'NT$';
       default: return '$';
     }
   };
@@ -135,7 +207,7 @@ export default function App() {
   const currencySymbol = getCurrencySymbol();
 
   // --- Transaction State Mutators ---
-  const handleAddTransaction = (newTx: Omit<Transaction, 'id' | 'time'>) => {
+  const handleAddTransaction = async (newTx: Omit<Transaction, 'id' | 'time'>) => {
     const now = new Date();
     let hours = now.getHours();
     const minutes = String(now.getMinutes()).padStart(2, '0');
@@ -144,27 +216,145 @@ export default function App() {
     hours = hours ? hours : 12; // first hour is 12
     const formattedTime = `${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
 
+    const txId = `t-${Date.now()}`;
     const created: Transaction = {
       ...newTx,
-      id: `t-${Date.now()}`,
+      id: txId,
       time: formattedTime
     };
 
-    setTransactions(prev => [created, ...prev]);
+    if (firebaseActive && auth?.currentUser) {
+      try {
+        const uid = auth.currentUser.uid;
+        await setDoc(doc(db, "users", uid, "transactions", txId), created);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `users/${auth.currentUser.uid}/transactions/${txId}`);
+      }
+    } else {
+      setTransactions(prev => {
+        const next = [created, ...prev];
+        if (authProfile) {
+          AccountDatabase.saveUserData(authProfile.email, { transactions: next });
+        }
+        return next;
+      });
+    }
     // Automatically redirect to Timeline overview so users can inspect records
     setActiveTab(AppTab.TIMELINE);
   };
 
-  const handleDeleteTransaction = (id: string) => {
-    setTransactions(prev => prev.filter(t => t.id !== id));
+  const handleDeleteTransaction = async (id: string) => {
+    if (firebaseActive && auth?.currentUser) {
+      try {
+        const uid = auth.currentUser.uid;
+        await deleteDoc(doc(db, "users", uid, "transactions", id));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `users/${auth.currentUser.uid}/transactions/${id}`);
+      }
+    } else {
+      setTransactions(prev => {
+        const next = prev.filter(t => t.id !== id);
+        if (authProfile) {
+          AccountDatabase.saveUserData(authProfile.email, { transactions: next });
+        }
+        return next;
+      });
+    }
   };
 
-  const handleClearTransactions = () => {
-    setTransactions([]);
+  const handleClearTransactions = async () => {
+    if (firebaseActive && auth?.currentUser) {
+      try {
+        const uid = auth.currentUser.uid;
+        for (const tx of transactions) {
+          await deleteDoc(doc(db, "users", uid, "transactions", tx.id));
+        }
+        setTransactions([]);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `users/${auth.currentUser.uid}/transactions`);
+      }
+    } else {
+      setTransactions([]);
+      if (authProfile) {
+        AccountDatabase.saveUserData(authProfile.email, { transactions: [] });
+      }
+    }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (firebaseActive) {
+      try {
+        await signOut(auth);
+      } catch (error) {
+        console.error("Sign out failed:", error);
+      }
+    } else {
+      AccountDatabase.setCurrentUserEmail(null);
+      setTransactions([]);
+      setBudgetLimit(10000);
+      setSettings({
+        notifications: true,
+        currency: 'USD',
+        bioLock: true,
+        theme: 'light'
+      });
+    }
     setAuthProfile(null);
+  };
+
+  const handleUpdateLimit = async (limit: number) => {
+    setBudgetLimit(limit);
+    if (firebaseActive && auth?.currentUser) {
+      try {
+        const uid = auth.currentUser.uid;
+        await updateDoc(doc(db, "users", uid), { budgetLimit: limit });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `users/${auth.currentUser.uid}`);
+      }
+    } else {
+      if (authProfile) {
+        AccountDatabase.saveUserData(authProfile.email, { budgetLimit: limit });
+      }
+    }
+  };
+
+  const handleUpdateProfile = async (prof: UserProfile) => {
+    setAuthProfile(prof);
+    if (firebaseActive && auth?.currentUser) {
+      try {
+        const uid = auth.currentUser.uid;
+        await updateProfile(auth.currentUser, { displayName: prof.name });
+        await updateDoc(doc(db, "users", uid), {
+          name: prof.name,
+          avatar: prof.avatar
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `users/${auth.currentUser.uid}`);
+      }
+    } else {
+      if (authProfile) {
+        AccountDatabase.saveUserData(authProfile.email, {
+          name: prof.name,
+          avatar: prof.avatar
+        });
+      }
+    }
+  };
+
+  const handleUpdateSettings = async (sets: AppSettings) => {
+    setSettings(sets);
+    if (firebaseActive && auth?.currentUser) {
+      try {
+        const uid = auth.currentUser.uid;
+        await updateDoc(doc(db, "users", uid), { settings: sets });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `users/${auth.currentUser.uid}`);
+      }
+    } else {
+      if (authProfile) {
+        AccountDatabase.saveUserData(authProfile.email, { settings: sets });
+      }
+    }
   };
 
   // Switch tabs programmatically
@@ -176,7 +366,23 @@ export default function App() {
   if (!authProfile) {
     return (
       <AuthView 
-        onLoginSuccess={(profile) => setAuthProfile(profile)} 
+        onLoginSuccess={(profile) => {
+          setAuthProfile(profile);
+          if (!firebaseActive) {
+            AccountDatabase.setCurrentUserEmail(profile.email);
+            const dbUser = AccountDatabase.getUserByEmail(profile.email);
+            if (dbUser) {
+              setTransactions(dbUser.transactions || []);
+              setBudgetLimit(dbUser.budgetLimit ?? 10000);
+              setSettings(dbUser.settings || {
+                notifications: true,
+                currency: 'USD',
+                bioLock: true,
+                theme: 'light'
+              });
+            }
+          }
+        }} 
       />
     );
   }
@@ -196,7 +402,7 @@ export default function App() {
     <div className="min-h-screen bg-[#f7f9fb] dark:bg-zinc-950 text-[#191c1e] dark:text-[#f7f9fb] flex flex-col font-sans transition-colors duration-200">
       
       {/* Centered Device shell context block to present pristine visual balance on desktop */}
-      <div className="w-full max-w-md mx-auto bg-[#f7f9fb] dark:bg-[#191c1e] min-h-screen flex flex-col relative pb-32 border-x border-zinc-200/20 dark:border-zinc-800/25 shadow-xl shadow-zinc-100 dark:shadow-none animate-fade-in">
+      <div className="w-full max-w-md mx-auto bg-[#f7f9fb] dark:bg-[#191c1e] h-screen h-[100dvh] flex flex-col relative border-x border-zinc-200/20 dark:border-zinc-800/25 shadow-xl shadow-zinc-100 dark:shadow-none animate-fade-in overflow-hidden">
         
         {/* Top Header Bar component */}
         <header className="sticky top-0 z-40 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md w-full h-14 border-b border-zinc-150/40 dark:border-zinc-800/10 flex justify-between items-center px-5">
@@ -235,7 +441,7 @@ export default function App() {
         </header>
 
         {/* Primary Main View Container content */}
-        <main className="flex-1 px-5 pt-5 flex flex-col select-none">
+        <main className="flex-1 px-5 pt-4 pb-[76px] flex flex-col overflow-y-auto scrollbar-none select-none">
           {activeTab === AppTab.ENTRY && (
             <EntryView 
               onAddTransaction={handleAddTransaction} 
@@ -267,9 +473,9 @@ export default function App() {
               budgetLimit={budgetLimit}
               settings={settings}
               transactions={transactions}
-              onUpdateLimit={(limit) => setBudgetLimit(limit)}
-              onUpdateProfile={(prof) => setAuthProfile(prof)}
-              onUpdateSettings={(sets) => setSettings(sets)}
+              onUpdateLimit={handleUpdateLimit}
+              onUpdateProfile={handleUpdateProfile}
+              onUpdateSettings={handleUpdateSettings}
               onClearTransactions={handleClearTransactions}
               onLogout={handleLogout}
               currencySymbol={currencySymbol}
